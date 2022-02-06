@@ -12,6 +12,10 @@ def apply(funcs, val):
     return val
 
 
+class CannotProcess(Exception):
+    pass
+
+
 class Namespacer(object):
 
     def __init__(self, file, lines: Iterable[str], namespace: str):
@@ -27,6 +31,7 @@ class Namespacer(object):
         self.namespace_active = False
         self.nesting_depth = 0
         self.drop_lines = 0
+        self.status = None
 
     @property
     def close_namespace(self):
@@ -116,6 +121,9 @@ class Namespacer(object):
         self.out_buf = old_out_buf
         return l, include_line, code_line, tmp_out_buf
 
+    def error(self, msg):
+        raise CannotProcess(msg)
+
     def process(self):
         code_lines = apply(
             [self.filter_preprocessor,
@@ -139,10 +147,7 @@ class Namespacer(object):
                         "'%s' starting on line %s contains '#includes' and code:\n%s: %s\n%s: %s"
                         % (first_if_line, first_if_line_nr, include_line[1], include_line[0],
                            code_line[1], code_line[0]))
-                    if self.namespace_active:
-                        return "mixed #if within namespace"
-                    else:
-                        return "mixed #if"
+                    self.error("mixed #if" + (" within namespace" if self.namespace_active else ""))
                 elif include_line and self.namespace_active:
                     self.msgs.append(
                         "'%s' in line %s (contained within '%s' starting in line %s) "
@@ -150,7 +155,7 @@ class Namespacer(object):
                         % (include_line[0], include_line[1], first_if_line, first_if_line_nr,
                            self.namespace_active[1], self.namespace_active[0])
                     )
-                    return "include within #if within namespace"
+                    self.error("include within #if within namespace")
                     # we can't easily close the namespace, as e.g. a class might be open
                 elif code_line and not self.namespace_active:
                     self.msgs.append(
@@ -193,7 +198,7 @@ class Namespacer(object):
                         )
                         if includes:
                             self.msgs.append("seen includes: %s" % ", ".join(includes))
-                        return "#include within namespace"
+                        self.error("#include within namespace")
                 else:
                     # an include before we opened or after we closed the namespace is okay
                     includes.add(included)
@@ -220,7 +225,7 @@ class Namespacer(object):
             self.msgs.append("closing namespace after last line %s: %s" % (self.line_nr, self.full_line.rstrip("\n")))
             self.out_buf.append(self.close_namespace)
 
-        return "success"
+        return self.status or "success"
 
 
 def main():
@@ -231,13 +236,27 @@ def main():
     parser.add_argument('--namespace', default='my_namespace', help='the name of the namespace to add')
     parser.add_argument('--dry-run', '-n', action='store_true', help='do not update the files if this flag is given')
     parser.add_argument('--quiet', '-q', action='store_true', help='don\'t print per-file results')
+    parser.add_argument('--force', '-f', action='store_true', help='also change file that can\'t correctly be namespaced')
     args = parser.parse_args()
+
+    if args.force:
+        def error(self, msg):
+            if not self.status:
+                self.status = msg
+            self.msgs.append(msg)
+            msg = msg.strip() + "\n"
+            self.out_buf.extend(indent(msg, "// ").splitlines(keepends=True))
+
+        Namespacer.error = error
 
     results = defaultdict(dict)
     for file in sorted(args.files):
         with open(file, "rt") as f:
             ns = Namespacer(file, f.readlines(), args.namespace)
-        result = ns.process()
+        try:
+            result = ns.process()
+        except CannotProcess as e:
+            result = e.args[0]
         results[result][file] = ns.msgs
         if result == "success" and not args.dry_run:
             with open(file, "wt") as f:
