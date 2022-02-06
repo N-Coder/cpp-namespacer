@@ -133,7 +133,10 @@ class Namespacer(object):
                         "'%s' starting on line %s contains '#includes' and code:\n%s: %s\n%s: %s"
                         % (first_if_line, first_if_line_nr, include_line[1], include_line[0],
                            code_line[1], code_line[0]))
-                    return "mixed if"
+                    if self.namespace_active:
+                        return "mixed #if within namespace"
+                    else:
+                        return "mixed #if"
                 elif include_line and self.namespace_active:
                     self.msgs.append(
                         "'%s' in line %s (contained within '%s' starting in line %s) "
@@ -141,7 +144,7 @@ class Namespacer(object):
                         % (include_line[0], include_line[1], first_if_line, first_if_line_nr,
                            self.namespace_active[1], self.namespace_active[0])
                     )
-                    return "include within namespace"
+                    return "include within #if within namespace"
                     # we can't easily close the namespace, as e.g. a class might be open
                 elif code_line and not self.namespace_active:
                     self.msgs.append(
@@ -172,8 +175,25 @@ class Namespacer(object):
                         "'%s' in line %s after first line of code in line %s: %s"
                         % (line, self.line_nr, self.namespace_active[1], self.namespace_active[0])
                     )
-                    return "include within namespace"
-                # else the include before we opened or after we closed the namespace is okay
+                    return "#include within namespace"
+                    # else the include before we opened or after we closed the namespace is okay
+
+                    if included in includes:
+                        self.msgs.append(
+                            "'%s' in line %s was also included above, ignoring second #include now within namespace"
+                            % (line, self.line_nr)
+                        )
+                    else:
+                        self.msgs.append(
+                            "'%s' in line %s after first line of code in line %s: %s"
+                            % (line, self.line_nr, self.namespace_active[1], self.namespace_active[0])
+                        )
+                        if includes:
+                            self.msgs.append("seen includes: %s" % ", ".join(includes))
+                        return "#include within namespace"
+                else:
+                    # an include before we opened or after we closed the namespace is okay
+                    includes.add(included)
             else:  # code line
                 if not self.namespace_active:
                     self.msgs.append("inserting namespace before code line %s: %s" % (self.line_nr, line))
