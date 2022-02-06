@@ -26,6 +26,7 @@ class Namespacer(object):
         self.include_guard = False
         self.namespace_active = False
         self.nesting_depth = 0
+        self.drop_lines = 0
 
     @property
     def close_namespace(self):
@@ -38,7 +39,10 @@ class Namespacer(object):
     def iter_lines(self):
         for self.line_nr, self.full_line in enumerate(self.lines, start=1):
             yield self.full_line
-            self.out_buf.append(self.full_line)
+            if self.drop_lines > 0:
+                self.drop_lines -= 1
+            else:
+                self.out_buf.append(self.full_line)
 
     def filter_empty_or_comment(self, iter):
         for l in iter:
@@ -122,6 +126,8 @@ class Namespacer(object):
             self.iter_lines()
         )
 
+        includes = set()
+
         for line in code_lines:
             while line and re.match("^#\s*if", line):
                 first_if_line = line
@@ -170,19 +176,16 @@ class Namespacer(object):
                 else:
                     self.msgs.append("superfluous '#endif' in line %s: %s" % (self.line_nr, line))
             elif re.match("^#\s*include", line):
+                included = re.match("^#\s*include (.*)", line).group(1).strip()
                 if self.namespace_active:
-                    self.msgs.append(
-                        "'%s' in line %s after first line of code in line %s: %s"
-                        % (line, self.line_nr, self.namespace_active[1], self.namespace_active[0])
-                    )
-                    return "#include within namespace"
-                    # else the include before we opened or after we closed the namespace is okay
-
                     if included in includes:
                         self.msgs.append(
                             "'%s' in line %s was also included above, ignoring second #include now within namespace"
                             % (line, self.line_nr)
                         )
+                        self.drop_lines += 1
+                        self.out_buf.append("// this include was already seen before, outside the namespace, so ignoring it here")
+                        self.out_buf.append("// " + line)
                     else:
                         self.msgs.append(
                             "'%s' in line %s after first line of code in line %s: %s"
@@ -195,14 +198,23 @@ class Namespacer(object):
                     # an include before we opened or after we closed the namespace is okay
                     includes.add(included)
             else:  # code line
-                if not self.namespace_active:
-                    self.msgs.append("inserting namespace before code line %s: %s" % (self.line_nr, line))
-                    self.out_buf.append(self.open_namespace)
-                    self.namespace_active = (line, self.line_nr)
-                # else a code line within the namespace is perfectly fine
                 if "namespace " + self.namespace in line:
                     self.msgs.append("namespace already present in line %s: %s" % (self.line_nr, line))
                     return "namespace already present"
+
+                is_class_predec = re.match("^\s*class\s*([^\s]+)\s*;\s*$", line)
+                if not self.namespace_active:
+                    if is_class_predec:
+                        self.drop_lines += 1
+                        self.out_buf.append(self.open_namespace)
+                        self.out_buf.append(line)
+                        self.out_buf.append(self.close_namespace)
+                        self.msgs.append("namespaced class '%s' predeclaration in line %s: %s" % (is_class_predec.group(1), self.line_nr, line))
+                    else:
+                        self.msgs.append("inserting namespace before code line %s: %s" % (self.line_nr, line))
+                        self.out_buf.append(self.open_namespace)
+                        self.namespace_active = (line, self.line_nr)
+                # else a code line within the namespace is perfectly fine
 
         if self.namespace_active:
             self.msgs.append("closing namespace after last line %s: %s" % (self.line_nr, self.full_line.rstrip("\n")))
