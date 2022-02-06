@@ -1,7 +1,9 @@
+import os
+import pathlib
 import re
-import sys
 from collections import defaultdict
 from pprint import pprint
+from typing import Iterable
 
 
 def apply(funcs, val):
@@ -11,12 +13,11 @@ def apply(funcs, val):
 
 
 class Namespacer(object):
-    CLOSE_NAMESPACE = "} // end namespace\n"
-    OPEN_NAMESPACE = "namespace ogdf_coin {\n"
 
-    def __init__(self, file, lines):
-        self.file = file
+    def __init__(self, file, lines: Iterable[str], namespace: str):
+        self.file = pathlib.Path(file)
         self.lines = lines
+        self.namespace = namespace
         self.out_buf = []
         self.msgs = []
 
@@ -25,6 +26,14 @@ class Namespacer(object):
         self.include_guard = False
         self.namespace_active = False
         self.nesting_depth = 0
+
+    @property
+    def close_namespace(self):
+        return "} // end namespace %s\n" % self.namespace
+
+    @property
+    def open_namespace(self):
+        return "namespace %s {\n" % self.namespace
 
     def iter_lines(self):
         for self.line_nr, self.full_line in enumerate(self.lines, start=1):
@@ -57,7 +66,7 @@ class Namespacer(object):
         for l in iter:
             if not self.include_guard:
                 m = re.match("^#\s*ifndef\s+([A-Za-z0-9_]+)", l)
-                if m and self.file.rsplit(".")[0].lower() in m.group(1).lower():
+                if m and self.file.name.rsplit(".")[0].lower() in m.group(1).lower():
                     l = next(iter)
                     if not re.match("^#\s*define\s+" + m.group(1), l):
                         print("Warning: broken include guard", m.group(0), l)
@@ -138,7 +147,7 @@ class Namespacer(object):
                     self.msgs.append(
                         "inserting namespace before '%s' on line %s because it contains code on line %s: %s"
                         % (first_if_line, first_if_line_nr, code_line[1], code_line[0]))
-                    self.out_buf.append(self.OPEN_NAMESPACE)
+                    self.out_buf.append(self.open_namespace)
                     self.namespace_active = (first_if_line, first_if_line_nr)
                 # else everything is alright
 
@@ -153,7 +162,7 @@ class Namespacer(object):
                         self.namespace_active = False
                         self.msgs.append(
                             "closing namespace before closing include guard on line %s: %s" % (self.line_nr, line))
-                        self.out_buf.append(self.CLOSE_NAMESPACE)
+                        self.out_buf.append(self.close_namespace)
                     # else there is nothing to close, i.e. no code within the include guards
                 else:
                     self.msgs.append("superfluous '#endif' in line %s: %s" % (self.line_nr, line))
@@ -168,32 +177,49 @@ class Namespacer(object):
             else:  # code line
                 if not self.namespace_active:
                     self.msgs.append("inserting namespace before code line %s: %s" % (self.line_nr, line))
-                    self.out_buf.append(self.OPEN_NAMESPACE)
+                    self.out_buf.append(self.open_namespace)
                     self.namespace_active = (line, self.line_nr)
                 # else a code line within the namespace is perfectly fine
-                if "namespace ogdf_coin" in line:
+                if "namespace " + self.namespace in line:
                     self.msgs.append("namespace already present in line %s: %s" % (self.line_nr, line))
                     return "namespace already present"
 
         if self.namespace_active:
             self.msgs.append("closing namespace after last line %s: %s" % (self.line_nr, self.full_line.rstrip("\n")))
-            self.out_buf.append(self.CLOSE_NAMESPACE)
+            self.out_buf.append(self.close_namespace)
 
         return "success"
 
 
 def main():
+    import argparse
+    from textwrap import indent
+    parser = argparse.ArgumentParser(description='Automatically add namespaces around your .h and .cpp files.')
+    parser.add_argument('files', type=pathlib.Path, nargs='+', help='the files to process in-place')
+    parser.add_argument('--namespace', default='my_namespace', help='the name of the namespace to add')
+    parser.add_argument('--dry-run', '-n', action='store_true', help='do not update the files if this flag is given')
+    parser.add_argument('--quiet', '-q', action='store_true', help='don\'t print per-file results')
+    args = parser.parse_args()
+
     results = defaultdict(dict)
-    for file in sorted(sys.argv[1:]):
+    for file in sorted(args.files):
         with open(file, "rt") as f:
-            ns = Namespacer(file, f.readlines())
+            ns = Namespacer(file, f.readlines(), args.namespace)
         result = ns.process()
         results[result][file] = ns.msgs
-        if result == "success":
+        if result == "success" and not args.dry_run:
             with open(file, "wt") as f:
                 f.writelines(ns.out_buf)
 
-    pprint(dict(results), width=200)
+    common = os.path.commonpath(args.files)
+    if not args.quiet:
+        for key, files in results.items():
+            print("\n\n# " + key + "\n")
+            for file, msgs in files.items():
+                print("- %s" % file.relative_to(common))
+                if msgs:
+                    print(indent("\n".join(msgs), "  "))
+
     pprint({k: len(v) for k, v in results.items()})
 
 
