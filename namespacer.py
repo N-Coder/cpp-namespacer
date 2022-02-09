@@ -52,8 +52,11 @@ class Namespacer(object):
     def filter_empty_or_comment(self, iter):
         for l in iter:
             l = l.strip()
-            if l and not l.startswith("//"):
-                yield l
+            if not l or l.startswith("//"):
+                continue
+            while l.endswith("\\"):
+                l = l[:-1].strip() + next(iter).strip()
+            yield l
 
     def filter_comment_block(self, iter):
         for l in iter:
@@ -75,12 +78,16 @@ class Namespacer(object):
         for l in iter:
             if not self.include_guard:
                 m = re.match("^#\s*ifndef\s+([A-Za-z0-9_]+)", l)
-                if m and self.file.name.rsplit(".")[0].lower() in m.group(1).lower():
+                if m:  # and self.file.name.rsplit(".")[0].lower() in m.group(1).lower():
+                    l_d = next(iter)
+                    if not re.match("^#\s*define\s+" + m.group(1), l_d):
+                        self.msgs.append("broken include guard for '%s' in line %s:\n%s\n%s" % (m.group(1), self.line_nr - 1, l, l_d))
+                        yield l
+                        yield l_d
+                    else:
+                        self.include_guard = True
+
                     l = next(iter)
-                    if not re.match("^#\s*define\s+" + m.group(1), l):
-                        print("Warning: broken include guard", m.group(0), l)
-                    l = next(iter)
-                    self.include_guard = True
 
             yield l
 
@@ -212,7 +219,7 @@ class Namespacer(object):
                     if is_class_predec:
                         self.drop_lines += 1
                         self.out_buf.append(self.open_namespace)
-                        self.out_buf.append(line)
+                        self.out_buf.append(line + "\n")
                         self.out_buf.append(self.close_namespace)
                         self.msgs.append("namespaced class '%s' predeclaration in line %s: %s" % (is_class_predec.group(1), self.line_nr, line))
                     else:
@@ -225,7 +232,12 @@ class Namespacer(object):
             self.msgs.append("closing namespace after last line %s: %s" % (self.line_nr, self.full_line.rstrip("\n")))
             self.out_buf.append(self.close_namespace)
 
-        return self.status or "success"
+        if self.status:
+            return self.status
+        elif self.out_buf == self.lines:
+            return "empty"
+        else:
+            return "success"
 
 
 def main():
@@ -258,7 +270,7 @@ def main():
         except CannotProcess as e:
             result = e.args[0]
         results[result][file] = ns.msgs
-        if result == "success" and not args.dry_run:
+        if (result == "success" or args.force) and not args.dry_run:
             with open(file, "wt") as f:
                 f.writelines(ns.out_buf)
 
