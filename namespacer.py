@@ -95,6 +95,8 @@ class Namespacer(object):
                         self.msgs.append("broken include guard for '%s' in line %s:\n%s\n%s" % (m.group(1), self.line_nr - 1, l, l_d))
                         yield l
                         yield l_d
+                        yield from iter  # stop processing further include guards
+                        return
                     else:
                         self.include_guard = True
 
@@ -287,7 +289,7 @@ def main():
         except CannotProcess as e:
             result = e.args[0]
         results[result][file] = ns.msgs
-        if (result == "success" or args.force) and not args.dry_run:
+        if not args.dry_run and (result == "success" or (result != "namespace already present" and args.force)):
             with open(file, "wt") as f:
                 f.writelines(ns.out_buf)
 
