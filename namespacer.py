@@ -34,15 +34,26 @@ class Namespacer(object):
         self.status = None
 
     @property
+    def open_namespace(self):
+        return "namespace %s {\n" % self.namespace
+
+    @property
     def close_namespace(self):
         return "} // end namespace %s\n" % self.namespace
 
     @property
-    def open_namespace(self):
-        return "namespace %s {\n" % self.namespace
+    def would_open_namespace(self):
+        return "// namespace %s {\n" % self.namespace
+
+    @property
+    def would_close_namespace(self):
+        return "// } // end namespace %s\n" % self.namespace
 
     def iter_lines(self):
+        excluded = [self.would_open_namespace, self.would_close_namespace]
         for self.line_nr, self.full_line in enumerate(self.lines, start=1):
+            if self.full_line in excluded:
+                continue  # strip the line from the out_buf
             yield self.full_line
             if self.drop_lines > 0:
                 self.drop_lines -= 1
@@ -248,10 +259,16 @@ def main():
     parser.add_argument('--namespace', default='my_namespace', help='the name of the namespace to add')
     parser.add_argument('--dry-run', '-n', action='store_true', help='do not update the files if this flag is given')
     parser.add_argument('--quiet', '-q', action='store_true', help='don\'t print per-file results')
-    parser.add_argument('--force', '-f', action='store_true', help='also change file that can\'t correctly be namespaced')
+    parser.add_argument('--force', '-f', action='store_true', help='also change files that can\'t correctly be namespaced')
+    parser.add_argument('--errors', '-e', action='store_true', help='mark lines with problems')
+    parser.add_argument('--comment', '-c', action='store_true', help='only mark namespace begin and end with comment')
     args = parser.parse_args()
 
-    if args.force:
+    if args.comment:
+        Namespacer.open_namespace = Namespacer.would_open_namespace
+        Namespacer.close_namespace = Namespacer.would_close_namespace
+
+    if args.errors:
         def error(self, msg):
             if not self.status:
                 self.status = msg
